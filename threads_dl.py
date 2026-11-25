@@ -638,8 +638,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  ! failed: {type(exc).__name__}: {exc}\n")
             failures.append((url, f"{type(exc).__name__}: {exc}"))
 
-    print(f"Done - {saved} file(s) saved, {skipped} skipped, "
-          f"{len(failures)}/{len(urls)} post(s) failed")
+    if args.list:
+        print(f"Done - inspected {len(urls)} post(s)")
+    else:
+        print(f"Done - {saved} file(s) saved, {skipped} skipped, "
+              f"{len(failures)}/{len(urls)} post(s) failed")
     if failures:
         for url, reason in failures:
             print(f"  x {url}\n    {reason}")
