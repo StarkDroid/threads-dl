@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "threads-dl"
+version = "1.0.0"
+description = "Download Threads videos in the highest quality the platform serves (DASH renditions, H.264 output, batch support)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "Trishiraj" }]
+keywords = ["threads", "downloader", "video", "cli", "dash", "vp9", "h264"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video",
+]
+dependencies = []
+
+[project.optional-dependencies]
+browser-cookies = ["browser_cookie3>=0.19"]
+
+[project.scripts]
+threads-dl = "threads_dl:main"
+
+[project.urls]
+Homepage = "https://github.com/StarkDroid/threads-dl"
+Issues = "https://github.com/StarkDroid/threads-dl/issues"
+
+[tool.setuptools]
+py-modules = ["threads_dl"]
