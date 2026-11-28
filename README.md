@@ -71,6 +71,41 @@ Used to mux split audio/video and to produce H.264. Without it, VP9 downloads st
 | Arch | `sudo pacman -S ffmpeg` |
 | Windows | `winget install Gyan.FFmpeg` (or `choco install ffmpeg`) |
 
+## Updating
+
+```bash
+# pipx (the recommended install)
+pipx reinstall threads-dl
+
+# uv tool
+uv tool upgrade threads-dl --reinstall
+
+# pip --user
+python3 -m pip install --user --force-reinstall --no-deps \
+  git+https://github.com/StarkDroid/threads-dl
+
+# local clone or symlink
+git pull --ff-only
+```
+
+`threads-dl` is installed from git rather than PyPI, so `pipx upgrade threads-dl` can report "already at latest version" without changing anything. `pipx reinstall` re-clones the repository and reliably picks up the newest commit.
+
+To stay on a specific release instead of the tip of `main`, install its tag:
+
+```bash
+pipx install --force "git+https://github.com/StarkDroid/threads-dl@v1.3.0"
+```
+
+Then confirm the version with `threads-dl --version`.
+
+Maintainers cut a release by bumping `__version__` in `threads_dl.py`, committing, then tagging the version:
+
+```bash
+git commit -am "chore: release v1.4.0"
+git tag -a v1.4.0 -m "v1.4.0"
+git push origin main --tags
+```
+
 ## Usage
 
 ```bash
