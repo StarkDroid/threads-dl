@@ -1,5 +1,6 @@
 """Offline unit tests - no network, no ffmpeg required."""
 
+import json
 import os
 import sys
 import tempfile
@@ -135,6 +136,76 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(tdl.video_indexes(items), [1, 3])
         self.assertEqual(tdl.video_indexes(items, {2, 3}), [3])
         self.assertEqual(tdl.video_indexes(items, {9}), [])
+
+
+class AudioTests(unittest.TestCase):
+    def _transcode_cmd(self, keep_audio):
+        with mock.patch.object(tdl.shutil, "which", return_value="/usr/bin/ffmpeg"), \
+                mock.patch.object(tdl, "run") as run:
+            tdl.transcode_h264("in.mp4", "out.mp4", delete_src=False,
+                               keep_audio=keep_audio)
+        return run.call_args[0][0]
+
+    def test_transcode_keeps_audio_by_default(self):
+        cmd = self._transcode_cmd(True)
+        self.assertIn("-c:a", cmd)
+        self.assertNotIn("-an", cmd)
+
+    def test_transcode_can_drop_audio(self):
+        cmd = self._transcode_cmd(False)
+        self.assertIn("-an", cmd)
+        self.assertNotIn("-c:a", cmd)
+
+    def test_strip_audio_remuxes_without_reencoding(self):
+        with mock.patch.object(tdl.shutil, "which", return_value="/usr/bin/ffmpeg"), \
+                mock.patch.object(tdl, "run") as run:
+            tdl.strip_audio("in.mp4", "out.mp4", delete_src=False)
+        cmd = run.call_args[0][0]
+        self.assertIn("-an", cmd)
+        self.assertIn("-c", cmd)
+
+    def _run_post(self, no_audio):
+        item = {"pk": "1", "video_dash_manifest": MPD}
+        page = '<script type="application/json">' + json.dumps(
+            {"code": "AAA", "carousel_media": [item]}) + "</script>"
+        args = SimpleNamespace(
+            output_dir=".", images=False, progressive=False, max_height=None,
+            list=False, force=False, copy=True, h264=False, crf=15,
+            preset="slow", video=None, no_audio=no_audio,
+        )
+        calls = []
+
+        def fake_download(url, dest, label="", cookie_header=None):
+            calls.append(url)
+            with open(dest, "wb") as fh:
+                fh.write(b"x")
+            return dest
+
+        def fake_mux(video, audio, out):
+            with open(out, "wb") as fh:
+                fh.write(b"x")
+            return out
+
+        url = "https://www.threads.com/@u/post/AAA"
+        with tempfile.TemporaryDirectory() as tmp:
+            args.output_dir = tmp
+            with mock.patch.object(tdl, "fetch",
+                                   return_value=(url, page.encode())), \
+                    mock.patch.object(tdl, "download", side_effect=fake_download), \
+                    mock.patch.object(tdl, "mux", side_effect=fake_mux):
+                saved, _ = tdl.process_post(url, args, None)
+            self.assertEqual(saved, 1)
+        self.assertIn("v2.mp4", calls[0])
+        return calls
+
+    def test_video_only_does_not_fetch_audio(self):
+        calls = self._run_post(no_audio=True)
+        self.assertEqual(len(calls), 1)
+
+    def test_audio_is_fetched_by_default(self):
+        calls = self._run_post(no_audio=False)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("a2.mp4", calls[1])
 
 
 class InputTests(unittest.TestCase):

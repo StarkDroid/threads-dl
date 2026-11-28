@@ -22,6 +22,7 @@ Usage:
     threads-dl URL --video 2              # only the 2nd video in a carousel
     threads-dl URL --max-height 1080      # cap resolution
     threads-dl URL --copy                 # keep original VP9 (VLC/IINA, faster)
+    threads-dl URL --no-audio             # video only: skip the audio track
     threads-dl URL --images               # also grab images in a carousel
     threads-dl URL --cookies-from-browser chrome   # private/login-only posts
     threads-dl URL --force                # re-download even if already saved
@@ -42,7 +43,7 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 DESKTOP_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -356,17 +357,31 @@ def mux(video: str, audio: str | None, out: str) -> str:
 
 
 def transcode_h264(src: str, out: str, crf: int = 15, preset: str = "slow",
-                   delete_src: bool = True) -> str:
+                   delete_src: bool = True, keep_audio: bool = True) -> str:
     if not shutil.which("ffmpeg"):
         sys.stderr.write(
             "  ! ffmpeg not found - file stays VP9, which QuickTime cannot open.\n"
             "    Install ffmpeg (brew install ffmpeg) or play it in VLC/IINA.\n"
         )
         return src
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", src,
+           "-c:v", "libx264", "-crf", str(crf), "-preset", preset,
+           "-pix_fmt", "yuv420p"]
+    cmd += ["-c:a", "copy"] if keep_audio else ["-an"]
+    cmd += ["-movflags", "+faststart", out]
+    run(cmd)
+    if delete_src and os.path.exists(src) and os.path.abspath(src) != os.path.abspath(out):
+        os.remove(src)
+    return out
+
+
+def strip_audio(src: str, out: str, delete_src: bool = True) -> str:
+    """Drop the audio track from a muxed MP4 without re-encoding the video."""
+    if not shutil.which("ffmpeg"):
+        sys.stderr.write("  ! ffmpeg not found - cannot strip the audio track\n")
+        return src
     run(["ffmpeg", "-y", "-loglevel", "error", "-i", src,
-         "-c:v", "libx264", "-crf", str(crf), "-preset", preset,
-         "-pix_fmt", "yuv420p", "-c:a", "copy",
-         "-movflags", "+faststart", out])
+         "-map", "0:v:0", "-c", "copy", "-an", "-movflags", "+faststart", out])
     if delete_src and os.path.exists(src) and os.path.abspath(src) != os.path.abspath(out):
         os.remove(src)
     return out
@@ -536,7 +551,8 @@ def process_post(url: str, args, cookie_header: str | None) -> tuple[int, int]:
         if not args.progressive and item.get("video_dash_manifest"):
             plan = parse_mpd(item["video_dash_manifest"])
         video = best_rendition(plan.get("video", []), args.max_height) if plan else None
-        audio = best_rendition(plan.get("audio", []), None, by_bandwidth=True) if plan else None
+        audio = best_rendition(plan.get("audio", []), None, by_bandwidth=True) \
+            if plan and not args.no_audio else None
 
         if video:
             label = f"DASH {video['width']}x{video['height']} @ {video['bandwidth'] // 1000} kb/s"
@@ -588,7 +604,15 @@ def process_post(url: str, args, cookie_header: str | None) -> tuple[int, int]:
             if needs_h264:
                 print("    encoding H.264 (QuickTime-compatible)...")
             produced = transcode_h264(final, final + ".tmp.mp4",
-                                      crf=args.crf, preset=args.preset)
+                                      crf=args.crf, preset=args.preset,
+                                      keep_audio=not args.no_audio)
+            if produced != final and os.path.exists(produced):
+                os.replace(produced, final)
+        elif args.no_audio and not video:
+            # A progressive MP4 carries its audio inside the same file, so it
+            # has to be remuxed out; DASH video renditions are already silent.
+            print("    stripping audio...")
+            produced = strip_audio(final, final + ".tmp.mp4")
             if produced != final and os.path.exists(produced):
                 os.replace(produced, final)
 
@@ -631,6 +655,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="force H.264 re-encode (default when the source is VP9)")
     ap.add_argument("--copy", action="store_true",
                     help="keep the original VP9 bitstream (VLC/IINA only, faster)")
+    ap.add_argument("--no-audio", action="store_true",
+                    help="video only: skip the audio track (silent, smaller)")
     ap.add_argument("--crf", type=int, default=15,
                     help="H.264 quality, lower is better (default: 15; 0 = lossless, huge)")
     ap.add_argument("--preset", default="slow",

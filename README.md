@@ -97,6 +97,9 @@ threads-dl URL --video 2
 
 # or a few of them (numbers as shown by --list)
 threads-dl URL --video 1,3-4
+
+# video only: skip the audio track entirely
+threads-dl URL --no-audio
 ```
 
 ```
@@ -120,6 +123,7 @@ threads-dl URL --video 1,3-4
 | `--force` | Re-download even when the output file already exists |
 | `--h264` | Force H.264 re-encode (already the default for VP9 sources) |
 | `--copy` | Keep the original VP9 bitstream — much faster, VLC/IINA only |
+| `--no-audio` | Video only: do not download or mux audio (silent, smaller) |
 | `--crf N` | H.264 quality, lower is better (default `15`, `0` = lossless) |
 | `--preset NAME` | x264 preset (default `slow`, `veryslow` for maximum efficiency) |
 | `--progressive` | Ignore DASH, take the player's MP4 (usually lower resolution) |
