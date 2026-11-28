@@ -23,6 +23,7 @@ Usage:
     threads-dl URL --max-height 1080      # cap resolution
     threads-dl URL --copy                 # keep original VP9 (VLC/IINA, faster)
     threads-dl URL --no-audio             # video only: skip the audio track
+    threads-dl URL --start 00:12 --end 00:34   # trim to a time range
     threads-dl URL --images               # also grab images in a carousel
     threads-dl URL --cookies-from-browser chrome   # private/login-only posts
     threads-dl URL --force                # re-download even if already saved
@@ -43,7 +44,7 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 DESKTOP_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -356,15 +357,24 @@ def mux(video: str, audio: str | None, out: str) -> str:
     return out
 
 
+def _trim_args(start: float | None, end: float | None) -> tuple[list[str], list[str]]:
+    """ffmpeg -ss input args and -t output args for a [start, end) cut."""
+    before = ["-ss", f"{start:.3f}"] if start else []
+    after = ["-t", f"{max(end - (start or 0.0), 0.0):.3f}"] if end is not None else []
+    return before, after
+
+
 def transcode_h264(src: str, out: str, crf: int = 15, preset: str = "slow",
-                   delete_src: bool = True, keep_audio: bool = True) -> str:
+                   delete_src: bool = True, keep_audio: bool = True,
+                   start: float | None = None, end: float | None = None) -> str:
     if not shutil.which("ffmpeg"):
         sys.stderr.write(
             "  ! ffmpeg not found - file stays VP9, which QuickTime cannot open.\n"
             "    Install ffmpeg (brew install ffmpeg) or play it in VLC/IINA.\n"
         )
         return src
-    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", src,
+    before, after = _trim_args(start, end)
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", *before, "-i", src, *after,
            "-c:v", "libx264", "-crf", str(crf), "-preset", preset,
            "-pix_fmt", "yuv420p"]
     cmd += ["-c:a", "copy"] if keep_audio else ["-an"]
@@ -375,16 +385,29 @@ def transcode_h264(src: str, out: str, crf: int = 15, preset: str = "slow",
     return out
 
 
-def strip_audio(src: str, out: str, delete_src: bool = True) -> str:
-    """Drop the audio track from a muxed MP4 without re-encoding the video."""
+def remux(src: str, out: str, start: float | None = None, end: float | None = None,
+          drop_audio: bool = False, delete_src: bool = True) -> str:
+    """Copy streams, optionally trimming and/or dropping audio (no re-encode)."""
     if not shutil.which("ffmpeg"):
-        sys.stderr.write("  ! ffmpeg not found - cannot strip the audio track\n")
+        sys.stderr.write("  ! ffmpeg not found - cannot remux the file\n")
         return src
-    run(["ffmpeg", "-y", "-loglevel", "error", "-i", src,
-         "-map", "0:v:0", "-c", "copy", "-an", "-movflags", "+faststart", out])
+    before, after = _trim_args(start, end)
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", *before, "-i", src, *after,
+           "-c", "copy"]
+    if drop_audio:
+        cmd += ["-map", "0:v:0", "-an"]
+    cmd += ["-movflags", "+faststart", out]
+    run(cmd)
     if delete_src and os.path.exists(src) and os.path.abspath(src) != os.path.abspath(out):
         os.remove(src)
     return out
+
+
+def strip_audio(src: str, out: str, delete_src: bool = True,
+                start: float | None = None, end: float | None = None) -> str:
+    """Drop the audio track from a muxed MP4 without re-encoding the video."""
+    return remux(src, out, start=start, end=end, drop_audio=True,
+                 delete_src=delete_src)
 
 
 # --------------------------------------------------------------------------- #
@@ -463,6 +486,49 @@ def _selection_arg(spec: str) -> set[int]:
     return parsed
 
 
+def parse_timestamp(spec: str) -> float:
+    """Parse 'SS', 'MM:SS' or 'HH:MM:SS[.mmm]' into seconds."""
+    parts = spec.strip().split(":")
+    if not 1 <= len(parts) <= 3:
+        raise ValueError(f"bad timestamp: {spec!r}")
+    total = 0.0
+    for i, part in enumerate(parts):
+        pattern = r"\d+(?:\.\d+)?" if i == len(parts) - 1 else r"\d+"
+        if not re.fullmatch(pattern, part):
+            raise ValueError(f"bad timestamp: {spec!r}")
+        total = total * 60 + float(part)
+    return total
+
+
+def fmt_timestamp(seconds: float) -> str:
+    """Render seconds as MM:SS[.mmm], or H:MM:SS[.mmm] past an hour."""
+    ms = int(round(seconds * 1000))
+    hours, ms = divmod(ms, 3_600_000)
+    minutes, ms = divmod(ms, 60_000)
+    secs, ms = divmod(ms, 1000)
+    text = f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
+    if ms:
+        text += f".{ms:03d}".rstrip("0")
+    return text
+
+
+def trim_suffix(start: float | None, end: float | None) -> str:
+    """Filename-safe marker for a trim window, e.g. '_trim_12s-34.5s'."""
+    def number(value: float) -> str:
+        return f"{value:.3f}".rstrip("0").rstrip(".") or "0"
+
+    begin = f"{number(start or 0.0)}s"
+    end_label = f"{number(end)}s" if end is not None else "end"
+    return f"_trim_{begin}-{end_label}"
+
+
+def _timestamp_arg(spec: str) -> float:
+    try:
+        return parse_timestamp(spec)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc))
+
+
 def collect_urls(args) -> list[str]:
     """Positional URLs + --file lists + stdin, deduped by shortcode."""
     raw: list[str] = list(args.urls)
@@ -523,6 +589,11 @@ def process_post(url: str, args, cookie_header: str | None) -> tuple[int, int]:
     elif args.video and not args.list:
         print(f"  selected video(s): {', '.join(str(i) for i in sorted(chosen))}")
 
+    trim_requested = args.start is not None or args.end is not None
+    if trim_requested and not args.list:
+        end_label = fmt_timestamp(args.end) if args.end is not None else "end"
+        print(f"  trim: {fmt_timestamp(args.start or 0.0)} - {end_label}")
+
     saved = skipped = 0
 
     for idx, item in enumerate(items, 1):
@@ -574,6 +645,8 @@ def process_post(url: str, args, cookie_header: str | None) -> tuple[int, int]:
 
         dims = f"{video['width']}x{video['height']}" if video else "prog"
         base = f"{username}_{shortcode}_{idx:02d}_{dims}"
+        if trim_requested:
+            base += trim_suffix(args.start, args.end)
         final = os.path.join(args.output_dir, base + ".mp4")
         if os.path.exists(final) and not args.force:
             print(f"  [{idx}] exists, skipping: {base}.mp4")
@@ -598,21 +671,36 @@ def process_post(url: str, args, cookie_header: str | None) -> tuple[int, int]:
         # Threads DASH renditions are VP9-in-MP4, which QuickTime and Safari
         # refuse to open. Re-encode to H.264 unless the user asked for a
         # straight copy (VLC/IINA users, or to keep the original bitstream).
+        # A trim is folded into that encode so the cut lands on an exact frame;
+        # --copy keeps the bitstream and falls back to a keyframe-aligned remux.
         source_codec = (video or {}).get("codec", "")
-        needs_h264 = not args.copy and source_codec.startswith("vp09")
+        needs_h264 = not args.copy and (source_codec.startswith("vp09")
+                                        or trim_requested)
+        trim_applied = False
         if needs_h264 or args.h264:
             if needs_h264:
                 print("    encoding H.264 (QuickTime-compatible)...")
             produced = transcode_h264(final, final + ".tmp.mp4",
                                       crf=args.crf, preset=args.preset,
-                                      keep_audio=not args.no_audio)
+                                      keep_audio=not args.no_audio,
+                                      start=args.start, end=args.end)
             if produced != final and os.path.exists(produced):
                 os.replace(produced, final)
+            trim_applied = trim_requested
         elif args.no_audio and not video:
             # A progressive MP4 carries its audio inside the same file, so it
             # has to be remuxed out; DASH video renditions are already silent.
             print("    stripping audio...")
-            produced = strip_audio(final, final + ".tmp.mp4")
+            produced = strip_audio(final, final + ".tmp.mp4",
+                                   start=args.start, end=args.end)
+            if produced != final and os.path.exists(produced):
+                os.replace(produced, final)
+            trim_applied = trim_requested
+
+        if trim_requested and not trim_applied:
+            print("    trimming (stream copy, cuts land on keyframes)...")
+            produced = remux(final, final + ".tmp.mp4",
+                             start=args.start, end=args.end)
             if produced != final and os.path.exists(produced):
                 os.replace(produced, final)
 
@@ -647,6 +735,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--video", type=_selection_arg, metavar="N[,N...]",
                     help="only download these videos, by the [N] number shown "
                          "by --list (e.g. 2, or 1,3-4; default: all)")
+    ap.add_argument("--start", type=_timestamp_arg, metavar="TIME",
+                    help="trim from this timestamp (SS, MM:SS or HH:MM:SS[.mmm])")
+    ap.add_argument("--end", type=_timestamp_arg, metavar="TIME",
+                    help="trim to this timestamp (same formats as --start)")
     ap.add_argument("--list", action="store_true", help="only list renditions")
     ap.add_argument("--images", action="store_true", help="also download carousel images")
     ap.add_argument("--force", action="store_true",
@@ -670,6 +762,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("-V", "--version", action="version",
                     version=f"threads-dl {__version__}")
     args = ap.parse_args(argv)
+
+    if args.start is not None and args.end is not None and args.end <= args.start:
+        ap.error("--end must be after --start")
+    if args.end is not None and args.end <= 0:
+        ap.error("--end must be greater than 0")
+    if (args.start is not None or args.end is not None) and not shutil.which("ffmpeg"):
+        ap.error("--start/--end need ffmpeg, which was not found on PATH")
 
     try:
         urls = collect_urls(args)

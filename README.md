@@ -100,6 +100,13 @@ threads-dl URL --video 1,3-4
 
 # video only: skip the audio track entirely
 threads-dl URL --no-audio
+
+# trim to a time range (SS, MM:SS or HH:MM:SS[.mmm])
+threads-dl URL --start 00:12 --end 00:34.5
+
+# start-only or end-only also work
+threads-dl URL --start 00:05
+threads-dl URL --end 00:20
 ```
 
 ```
@@ -118,6 +125,8 @@ threads-dl URL --no-audio
 | `-o, --output-dir DIR` | Where to save files (default: current directory) |
 | `--max-height N` | Cap vertical resolution, e.g. `1080` (default: no cap) |
 | `--video N[,N...]` | Download only these videos, by the `[N]` number shown by `--list` (`2`, `1,3-4`). Applies to every post in a batch |
+| `--start TIME` | Trim from this timestamp (`SS`, `MM:SS` or `HH:MM:SS[.mmm]`) |
+| `--end TIME` | Trim to this timestamp (same formats as `--start`) |
 | `--list` | Print the available renditions and exit |
 | `--images` | Also download images in a carousel |
 | `--force` | Re-download even when the output file already exists |
@@ -131,6 +140,8 @@ threads-dl URL --no-audio
 | `--cookie STRING` | Raw `Cookie:` header value |
 | `--cookies-from-browser NAME` | `chrome`, `firefox`, `edge`, `brave`, `arc`, `safari` |
 | `-V, --version` | Print version |
+
+Trimming needs `ffmpeg`. Cuts are frame-accurate by default because they are folded into the H.264 encode. With `--copy` the streams are copied instead, which is faster but cuts snap to the nearest keyframe at or before the requested timestamp.
 
 Browser cookie import needs one optional dependency:
 
@@ -165,6 +176,8 @@ artha1335h3_DUdIwZsgduZ_01_1200x1600.mp4
 Carousel images become `<username>_<shortcode>_<index>.jpg`. Existing files are skipped, so re-running the same command only fetches what is missing.
 
 Carousel items keep their post order in the `[N]` listing and in the filename index, so `--video 2` always means the second item and saves `..._02_...mp4`. Images in a carousel are unaffected by `--video`; use `--images` to include them.
+
+Trimmed files include the window in the name, e.g. `<username>_<shortcode>_01_1080x1920_trim_12s-34.5s.mp4`, so different trims of the same post do not overwrite or skip each other. Trim windows apply to videos only; carousel images are unaffected.
 
 Exit codes: `0` success, `1` at least one post failed, `2` bad invocation. Failures are reported per post at the end, and one bad link never aborts the rest of the batch.
 

@@ -171,7 +171,7 @@ class AudioTests(unittest.TestCase):
         args = SimpleNamespace(
             output_dir=".", images=False, progressive=False, max_height=None,
             list=False, force=False, copy=True, h264=False, crf=15,
-            preset="slow", video=None, no_audio=no_audio,
+            preset="slow", video=None, no_audio=no_audio, start=None, end=None,
         )
         calls = []
 
@@ -206,6 +206,50 @@ class AudioTests(unittest.TestCase):
         calls = self._run_post(no_audio=False)
         self.assertEqual(len(calls), 2)
         self.assertIn("a2.mp4", calls[1])
+
+
+class TrimTests(unittest.TestCase):
+    def test_parse_timestamp_formats(self):
+        self.assertEqual(tdl.parse_timestamp("90"), 90.0)
+        self.assertEqual(tdl.parse_timestamp("1:30"), 90.0)
+        self.assertEqual(tdl.parse_timestamp("01:02:03.5"), 3723.5)
+
+    def test_parse_timestamp_rejects_bad_values(self):
+        for spec in ("", "x", "1::2", "-1", "1:-2", "1:2:3:4", "1.5:30"):
+            with self.subTest(spec=spec):
+                with self.assertRaises(ValueError):
+                    tdl.parse_timestamp(spec)
+
+    def test_fmt_timestamp(self):
+        self.assertEqual(tdl.fmt_timestamp(5), "00:05")
+        self.assertEqual(tdl.fmt_timestamp(90.5), "01:30.5")
+        self.assertEqual(tdl.fmt_timestamp(3723), "1:02:03")
+
+    def test_trim_suffix_is_filename_safe(self):
+        self.assertEqual(tdl.trim_suffix(None, 3.5), "_trim_0s-3.5s")
+        self.assertEqual(tdl.trim_suffix(12, 34), "_trim_12s-34s")
+        self.assertEqual(tdl.trim_suffix(1.25, None), "_trim_1.25s-end")
+
+    def test_transcode_passes_trim_window(self):
+        with mock.patch.object(tdl.shutil, "which", return_value="/usr/bin/ffmpeg"), \
+                mock.patch.object(tdl, "run") as run:
+            tdl.transcode_h264("in.mp4", "out.mp4", delete_src=False,
+                               start=5, end=12.5)
+        cmd = run.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("-ss") + 1], "5.000")
+        self.assertEqual(cmd[cmd.index("-t") + 1], "7.500")
+        self.assertLess(cmd.index("-ss"), cmd.index("-i"))
+        self.assertGreater(cmd.index("-t"), cmd.index("-i"))
+
+    def test_trim_remux_copies_streams(self):
+        with mock.patch.object(tdl.shutil, "which", return_value="/usr/bin/ffmpeg"), \
+                mock.patch.object(tdl, "run") as run:
+            tdl.remux("in.mp4", "out.mp4", start=5, end=12, delete_src=False)
+        cmd = run.call_args[0][0]
+        self.assertIn("-ss", cmd)
+        self.assertIn("-t", cmd)
+        self.assertIn("copy", cmd)
+        self.assertNotIn("-an", cmd)
 
 
 class InputTests(unittest.TestCase):
@@ -258,6 +302,18 @@ class CliTests(unittest.TestCase):
     def test_bad_video_selection_is_an_error(self):
         with self.assertRaises(SystemExit) as ctx:
             tdl.main(["https://www.threads.com/@a/post/AAA", "--video", "0"])
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_bad_trim_window_is_an_error(self):
+        with self.assertRaises(SystemExit) as ctx:
+            tdl.main(["https://www.threads.com/@a/post/AAA",
+                      "--start", "10", "--end", "5"])
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_trim_requires_ffmpeg(self):
+        with mock.patch.object(tdl.shutil, "which", return_value=None):
+            with self.assertRaises(SystemExit) as ctx:
+                tdl.main(["https://www.threads.com/@a/post/AAA", "--start", "1"])
         self.assertEqual(ctx.exception.code, 2)
 
 
