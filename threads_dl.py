@@ -24,6 +24,7 @@ Usage:
     threads-dl URL --copy                 # keep original VP9 (VLC/IINA, faster)
     threads-dl URL --no-audio             # video only: skip the audio track
     threads-dl URL --start 00:12 --end 00:34   # trim to a time range
+    threads-dl URL --name myclip           # save as myclip.mp4
     threads-dl URL --images               # also grab images in a carousel
     threads-dl URL --cookies-from-browser chrome   # private/login-only posts
     threads-dl URL --force                # re-download even if already saved
@@ -44,7 +45,7 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 DESKTOP_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -522,6 +523,24 @@ def trim_suffix(start: float | None, end: float | None) -> str:
     return f"_trim_{begin}-{end_label}"
 
 
+def output_base(name: str) -> str:
+    """Sanitize --name into a filename stem, dropping a trailing .mp4."""
+    raw = os.path.basename(name.strip())
+    if raw.lower().endswith(".mp4"):
+        raw = raw[:-4]
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("_")[:60].strip("._ ")
+    if not stem or stem in (".", ".."):
+        raise ValueError("name has no usable characters")
+    return stem
+
+
+def _name_arg(name: str) -> str:
+    try:
+        return output_base(name)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc))
+
+
 def _timestamp_arg(spec: str) -> float:
     try:
         return parse_timestamp(spec)
@@ -644,9 +663,14 @@ def process_post(url: str, args, cookie_header: str | None) -> tuple[int, int]:
             continue
 
         dims = f"{video['width']}x{video['height']}" if video else "prog"
-        base = f"{username}_{shortcode}_{idx:02d}_{dims}"
-        if trim_requested:
-            base += trim_suffix(args.start, args.end)
+        if args.name:
+            base = args.name
+            if len(chosen) > 1:
+                base = f"{base}_{idx:02d}"
+        else:
+            base = f"{username}_{shortcode}_{idx:02d}_{dims}"
+            if trim_requested:
+                base += trim_suffix(args.start, args.end)
         final = os.path.join(args.output_dir, base + ".mp4")
         if os.path.exists(final) and not args.force:
             print(f"  [{idx}] exists, skipping: {base}.mp4")
@@ -730,6 +754,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("-f", "--file", action="append", metavar="FILE",
                     help="read links from a file, one per line ('-' for stdin)")
     ap.add_argument("-o", "--output-dir", default=".", help="where to save (default: .)")
+    ap.add_argument("--name", type=_name_arg, metavar="NAME",
+                    help="save the video under this name (extension added "
+                         "automatically; multi-video posts get _01, _02 suffixes)")
     ap.add_argument("--max-height", type=int, default=None,
                     help="cap vertical resolution, e.g. 1080")
     ap.add_argument("--video", type=_selection_arg, metavar="N[,N...]",
@@ -776,6 +803,8 @@ def main(argv: list[str] | None = None) -> int:
         ap.error(f"cannot read link file: {exc}")
     if not urls:
         ap.error("no links given (pass URLs, --file links.txt, or pipe them on stdin)")
+    if args.name and len(urls) > 1:
+        ap.error("--name works with one post at a time")
 
     cookie_header = args.cookie
     if args.cookies:

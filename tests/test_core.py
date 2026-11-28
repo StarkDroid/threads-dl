@@ -164,14 +164,15 @@ class AudioTests(unittest.TestCase):
         self.assertIn("-an", cmd)
         self.assertIn("-c", cmd)
 
-    def _run_post(self, no_audio):
-        item = {"pk": "1", "video_dash_manifest": MPD}
+    def _run_post(self, no_audio, name=None, start=None, end=None, items=None):
+        items = items or [{"pk": "1", "video_dash_manifest": MPD}]
         page = '<script type="application/json">' + json.dumps(
-            {"code": "AAA", "carousel_media": [item]}) + "</script>"
+            {"code": "AAA", "carousel_media": items}) + "</script>"
         args = SimpleNamespace(
             output_dir=".", images=False, progressive=False, max_height=None,
-            list=False, force=False, copy=True, h264=False, crf=15,
-            preset="slow", video=None, no_audio=no_audio, start=None, end=None,
+            list=False, force=False, copy=False, h264=False, crf=15,
+            preset="slow", video=None, no_audio=no_audio, start=start,
+            end=end, name=name,
         )
         calls = []
 
@@ -186,26 +187,51 @@ class AudioTests(unittest.TestCase):
                 fh.write(b"x")
             return out
 
+        def fake_transcode(src, out, **kwargs):
+            with open(out, "wb") as fh:
+                fh.write(b"x")
+            return out
+
         url = "https://www.threads.com/@u/post/AAA"
         with tempfile.TemporaryDirectory() as tmp:
             args.output_dir = tmp
             with mock.patch.object(tdl, "fetch",
                                    return_value=(url, page.encode())), \
                     mock.patch.object(tdl, "download", side_effect=fake_download), \
-                    mock.patch.object(tdl, "mux", side_effect=fake_mux):
+                    mock.patch.object(tdl, "mux", side_effect=fake_mux), \
+                    mock.patch.object(tdl, "transcode_h264",
+                                      side_effect=fake_transcode):
                 saved, _ = tdl.process_post(url, args, None)
-            self.assertEqual(saved, 1)
-        self.assertIn("v2.mp4", calls[0])
-        return calls
+            files = sorted(os.listdir(tmp))
+            self.assertEqual(saved, len(items))
+            self.assertIn("v2.mp4", calls[0])
+        return calls, files
 
     def test_video_only_does_not_fetch_audio(self):
-        calls = self._run_post(no_audio=True)
+        calls, _ = self._run_post(no_audio=True)
         self.assertEqual(len(calls), 1)
 
     def test_audio_is_fetched_by_default(self):
-        calls = self._run_post(no_audio=False)
+        calls, _ = self._run_post(no_audio=False)
         self.assertEqual(len(calls), 2)
         self.assertIn("a2.mp4", calls[1])
+
+    def test_custom_name_is_used_verbatim(self):
+        _, files = self._run_post(no_audio=True, name="myclip")
+        self.assertEqual(files, ["myclip.mp4"])
+
+    def test_custom_name_ignores_trim_suffix(self):
+        _, files = self._run_post(no_audio=True, name="myclip",
+                                  start=1.0, end=3.0)
+        self.assertEqual(files, ["myclip.mp4"])
+
+    def test_multi_video_post_indexes_custom_names(self):
+        items = [
+            {"pk": "1", "video_dash_manifest": MPD},
+            {"pk": "2", "video_dash_manifest": MPD},
+        ]
+        _, files = self._run_post(no_audio=True, name="myclip", items=items)
+        self.assertEqual(files, ["myclip_01.mp4", "myclip_02.mp4"])
 
 
 class TrimTests(unittest.TestCase):
@@ -250,6 +276,19 @@ class TrimTests(unittest.TestCase):
         self.assertIn("-t", cmd)
         self.assertIn("copy", cmd)
         self.assertNotIn("-an", cmd)
+
+
+class NameTests(unittest.TestCase):
+    def test_output_base_sanitizes(self):
+        self.assertEqual(tdl.output_base("My Clip"), "My_Clip")
+        self.assertEqual(tdl.output_base("dir/clip.mp4"), "clip")
+        self.assertEqual(tdl.output_base("clip.MP4"), "clip")
+
+    def test_output_base_rejects_empty_names(self):
+        for spec in ("", "   ", "!!!", ".mp4"):
+            with self.subTest(spec=spec):
+                with self.assertRaises(ValueError):
+                    tdl.output_base(spec)
 
 
 class InputTests(unittest.TestCase):
@@ -314,6 +353,18 @@ class CliTests(unittest.TestCase):
         with mock.patch.object(tdl.shutil, "which", return_value=None):
             with self.assertRaises(SystemExit) as ctx:
                 tdl.main(["https://www.threads.com/@a/post/AAA", "--start", "1"])
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_bad_name_is_an_error(self):
+        with self.assertRaises(SystemExit) as ctx:
+            tdl.main(["https://www.threads.com/@a/post/AAA", "--name", "!!!"])
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_name_with_multiple_posts_is_an_error(self):
+        with self.assertRaises(SystemExit) as ctx:
+            tdl.main(["https://www.threads.com/@a/post/AAA",
+                      "https://www.threads.com/@a/post/BBB",
+                      "--name", "clip"])
         self.assertEqual(ctx.exception.code, 2)
 
 

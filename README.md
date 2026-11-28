@@ -93,7 +93,7 @@ git pull --ff-only
 To stay on a specific release instead of the tip of `main`, install its tag:
 
 ```bash
-pipx install --force "git+https://github.com/StarkDroid/threads-dl@v1.3.0"
+pipx install --force "git+https://github.com/StarkDroid/threads-dl@v1.4.0"
 ```
 
 Then confirm the version with `threads-dl --version`.
@@ -142,6 +142,9 @@ threads-dl URL --start 00:12 --end 00:34.5
 # start-only or end-only also work
 threads-dl URL --start 00:05
 threads-dl URL --end 00:20
+
+# save under a custom name (extension is added for you)
+threads-dl URL --name my-clip
 ```
 
 ```
@@ -158,6 +161,7 @@ threads-dl URL --end 00:20
 | `URLS...` | One or more post / `/share/` links |
 | `-f, --file FILE` | Read links from a file, one per line (`-` for stdin) |
 | `-o, --output-dir DIR` | Where to save files (default: current directory) |
+| `--name NAME` | Save the video under this name (`.mp4` added automatically). One post at a time |
 | `--max-height N` | Cap vertical resolution, e.g. `1080` (default: no cap) |
 | `--video N[,N...]` | Download only these videos, by the `[N]` number shown by `--list` (`2`, `1,3-4`). Applies to every post in a batch |
 | `--start TIME` | Trim from this timestamp (`SS`, `MM:SS` or `HH:MM:SS[.mmm]`) |
@@ -213,6 +217,8 @@ Carousel images become `<username>_<shortcode>_<index>.jpg`. Existing files are 
 Carousel items keep their post order in the `[N]` listing and in the filename index, so `--video 2` always means the second item and saves `..._02_...mp4`. Images in a carousel are unaffected by `--video`; use `--images` to include them.
 
 Trimmed files include the window in the name, e.g. `<username>_<shortcode>_01_1080x1920_trim_12s-34.5s.mp4`, so different trims of the same post do not overwrite or skip each other. Trim windows apply to videos only; carousel images are unaffected.
+
+With `--name myclip`, a single video is saved as `myclip.mp4`. If the post has more than one selected video, the carousel index is appended (`myclip_01.mp4`, `myclip_02.mp4`). Names are sanitized, a trailing `.mp4` is accepted, and the automatic trim suffix is dropped because you chose the name. `--name` applies to videos and is limited to one post per run; images keep their default names.
 
 Exit codes: `0` success, `1` at least one post failed, `2` bad invocation. Failures are reported per post at the end, and one bad link never aborts the rest of the batch.
 
