@@ -91,6 +91,12 @@ pbpaste | threads-dl -f -
 
 # inspect the renditions without downloading anything
 threads-dl URL --list
+
+# a carousel with several videos: grab only the second one
+threads-dl URL --video 2
+
+# or a few of them (numbers as shown by --list)
+threads-dl URL --video 1,3-4
 ```
 
 ```
@@ -108,6 +114,7 @@ threads-dl URL --list
 | `-f, --file FILE` | Read links from a file, one per line (`-` for stdin) |
 | `-o, --output-dir DIR` | Where to save files (default: current directory) |
 | `--max-height N` | Cap vertical resolution, e.g. `1080` (default: no cap) |
+| `--video N[,N...]` | Download only these videos, by the `[N]` number shown by `--list` (`2`, `1,3-4`). Applies to every post in a batch |
 | `--list` | Print the available renditions and exit |
 | `--images` | Also download images in a carousel |
 | `--force` | Re-download even when the output file already exists |
@@ -152,6 +159,8 @@ artha1335h3_DUdIwZsgduZ_01_1200x1600.mp4
 ```
 
 Carousel images become `<username>_<shortcode>_<index>.jpg`. Existing files are skipped, so re-running the same command only fetches what is missing.
+
+Carousel items keep their post order in the `[N]` listing and in the filename index, so `--video 2` always means the second item and saves `..._02_...mp4`. Images in a carousel are unaffected by `--video`; use `--images` to include them.
 
 Exit codes: `0` success, `1` at least one post failed, `2` bad invocation. Failures are reported per post at the end, and one bad link never aborts the rest of the batch.
 

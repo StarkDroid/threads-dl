@@ -110,6 +110,33 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(tdl.best_image(item)["url"], "big")
 
 
+class SelectionTests(unittest.TestCase):
+    def test_single_number(self):
+        self.assertEqual(tdl.parse_selection("2"), {2})
+
+    def test_list_and_ranges(self):
+        self.assertEqual(tdl.parse_selection("1, 3-5"), {1, 3, 4, 5})
+
+    def test_none_means_every_video(self):
+        self.assertIsNone(tdl.parse_selection(None))
+
+    def test_rejects_bad_specs(self):
+        for spec in ("", "0", "-1", "3-1", "x", "1-", "1,0"):
+            with self.subTest(spec=spec):
+                with self.assertRaises(ValueError):
+                    tdl.parse_selection(spec)
+
+    def test_video_indexes_filters_carousel_items(self):
+        items = [
+            {"video_dash_manifest": "x"},
+            {"image_versions2": {"candidates": []}},
+            {"video_versions": [{"url": "u"}]},
+        ]
+        self.assertEqual(tdl.video_indexes(items), [1, 3])
+        self.assertEqual(tdl.video_indexes(items, {2, 3}), [3])
+        self.assertEqual(tdl.video_indexes(items, {9}), [])
+
+
 class InputTests(unittest.TestCase):
     def test_collect_urls_strips_comments_and_duplicates(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -155,6 +182,11 @@ class CliTests(unittest.TestCase):
         with mock.patch.object(sys, "argv", ["threads-dl"]):
             with self.assertRaises(SystemExit) as ctx:
                 tdl.main([])
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_bad_video_selection_is_an_error(self):
+        with self.assertRaises(SystemExit) as ctx:
+            tdl.main(["https://www.threads.com/@a/post/AAA", "--video", "0"])
         self.assertEqual(ctx.exception.code, 2)
 
 

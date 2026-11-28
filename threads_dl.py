@@ -19,6 +19,7 @@ Usage:
     threads-dl -f links.txt -o ~/Videos            # one link per line
     pbpaste | threads-dl -f -                      # links from the clipboard
     threads-dl URL --list                 # show renditions, download nothing
+    threads-dl URL --video 2              # only the 2nd video in a carousel
     threads-dl URL --max-height 1080      # cap resolution
     threads-dl URL --copy                 # keep original VP9 (VLC/IINA, faster)
     threads-dl URL --images               # also grab images in a carousel
@@ -41,7 +42,7 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 DESKTOP_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -243,6 +244,17 @@ def best_rendition(rends: list[dict], max_height: int | None, by_bandwidth=False
     return max(pool, key=lambda r: (r["width"] * r["height"], r["bandwidth"]))
 
 
+def has_video(item: dict) -> bool:
+    """Whether a carousel item carries playable video."""
+    return bool(item.get("video_versions") or item.get("video_dash_manifest"))
+
+
+def video_indexes(items: list[dict], selection: set[int] | None = None) -> list[int]:
+    """1-based carousel positions of videos, optionally filtered by selection."""
+    return [i for i, item in enumerate(items, 1)
+            if has_video(item) and (selection is None or i in selection)]
+
+
 def progressive_url(item: dict) -> str | None:
     """The plain MP4 the web player uses - fallback when there is no manifest."""
     versions = item.get("video_versions") or []
@@ -402,6 +414,40 @@ def safe(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_")[:60] or "post"
 
 
+def parse_selection(spec: str | None) -> set[int] | None:
+    """Parse a 1-based pick list ('2', '1,3' or '2-4') into a set of ints."""
+    if spec is None:
+        return None
+    chosen: set[int] = set()
+    for part in spec.replace(" ", "").split(","):
+        if not part:
+            continue
+        if "-" in part:
+            lo, _, hi = part.partition("-")
+            if not (lo.isdigit() and hi.isdigit()):
+                raise ValueError(f"bad range: {part!r}")
+            start, end = int(lo), int(hi)
+            if start < 1 or end < start:
+                raise ValueError(f"bad range: {part!r}")
+            chosen.update(range(start, end + 1))
+        else:
+            if not part.isdigit() or int(part) < 1:
+                raise ValueError(f"bad number: {part!r}")
+            chosen.add(int(part))
+    if not chosen:
+        raise ValueError("no numbers given")
+    return chosen
+
+
+def _selection_arg(spec: str) -> set[int]:
+    try:
+        parsed = parse_selection(spec)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc))
+    assert parsed is not None
+    return parsed
+
+
 def collect_urls(args) -> list[str]:
     """Positional URLs + --file lists + stdin, deduped by shortcode."""
     raw: list[str] = list(args.urls)
@@ -449,19 +495,23 @@ def process_post(url: str, args, cookie_header: str | None) -> tuple[int, int]:
     media = find_media(blocks, shortcode)
     items = media.get("carousel_media") or [media]
 
-    n_video = sum(1 for it in items
-                  if it.get("video_versions") or it.get("video_dash_manifest"))
+    n_video = len(video_indexes(items))
     n_image = sum(1 for it in items
-                  if not (it.get("video_versions") or it.get("video_dash_manifest"))
-                  and it.get("image_versions2"))
+                  if not has_video(it) and it.get("image_versions2"))
     print(f"  post: {media.get('code') or shortcode} - {len(items)} item(s): "
           f"{n_video} video, {n_image} image")
+
+    chosen = set(video_indexes(items, args.video))
+    if args.video and not chosen:
+        available = ", ".join(str(i) for i in video_indexes(items)) or "none"
+        print(f"  ! --video matched no video here (videos: {available})")
+    elif args.video and not args.list:
+        print(f"  selected video(s): {', '.join(str(i) for i in sorted(chosen))}")
 
     saved = skipped = 0
 
     for idx, item in enumerate(items, 1):
-        is_video = bool(item.get("video_versions") or item.get("video_dash_manifest"))
-        if not is_video:
+        if not has_video(item):
             if not args.images:
                 continue
             img = best_image(item)
@@ -477,6 +527,9 @@ def process_post(url: str, args, cookie_header: str | None) -> tuple[int, int]:
             download(img["url"], dest, label=name, cookie_header=cookie_header)
             print(f"    saved {dest}")
             saved += 1
+            continue
+
+        if idx not in chosen:
             continue
 
         plan = {}
@@ -567,6 +620,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("-o", "--output-dir", default=".", help="where to save (default: .)")
     ap.add_argument("--max-height", type=int, default=None,
                     help="cap vertical resolution, e.g. 1080")
+    ap.add_argument("--video", type=_selection_arg, metavar="N[,N...]",
+                    help="only download these videos, by the [N] number shown "
+                         "by --list (e.g. 2, or 1,3-4; default: all)")
     ap.add_argument("--list", action="store_true", help="only list renditions")
     ap.add_argument("--images", action="store_true", help="also download carousel images")
     ap.add_argument("--force", action="store_true",
